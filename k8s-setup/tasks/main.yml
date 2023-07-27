@@ -1,0 +1,77 @@
+# tasks file for k8s-setup
+- name: Set Server HOSTNAME
+  ansible.builtin.command: hostnamectl set-hostname {{ hostname }}
+- name: Enable Forwarding IPv4 and letting iptables see bridged traffic
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+- name: sysctl params required by setup, params persist across reboots
+  copy:
+    dest: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+- name: Load overlay and br_netfilter kernel module
+  become: yes
+  ansible.builtin.shell: |
+    modprobe overlay
+    modprobe br_netfilter
+    sysctl --system
+- name: Create Kubernetes repository
+  copy: 
+    dest: /etc/yum.repos.d/kubernetes.repo
+    content: |
+      [kubernetes]
+      name=Kubernetes
+      baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+      exclude=kubelet kubeadm kubectl
+- name: Set SELinux in permissive mode 
+  become: yes
+  ansible.builtin.shell: |
+    setenforce 0
+    sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+- name: diasbale swap and comment /etc/fstab
+  become: yes
+  ansible.builtin.shell: |
+    swapoff -a
+    sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+- name: Stop and disable firewalld service
+  service: name=firewalld state=stopped enabled=False
+
+- name: Download latest Docker package repository
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/centos/docker-ce.repo 
+    dest: /etc/yum.repos.d/docker.repo
+
+- name: install Kubeadm, kubectl, kubelet, containerd and Docker packages
+  ansible.builtin.yum:
+    name:
+      - kubeadm
+      - kubectl
+      - kubelet
+      - containerd
+      - docker
+    state: present
+    
+- name: remove containerd configuration file
+  ansible.builtin.file:
+    path: /etc/containerd/config.toml 
+    state: absent
+
+- name: Restast and enable kubelet, containerd and docker service
+  ansible.builtin.service:
+    name: {{ item }}
+    state: started 
+    enabled: yes
+  with_items:
+    - kubelet
+    - docker
+    - containerd
+
